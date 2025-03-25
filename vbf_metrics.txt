@@ -1,0 +1,43 @@
+===== VBF PROTOCOL PERFORMANCE METRICS =====
+Pipe Radius: 120 units
+Total Nodes: 150
+Nodes in Pipe: 29 (19.3%)
+Source-to-Sink Distance: 800.0 units
+Hop Count: 2
+Path Length: 818.3 units
+
+--- Energy ---
+Total Energy Consumption: 48105.86 microjoules
+Energy per Hop: 24052.93 microjoules/hop
+
+--- Delay ---
+Total End-to-End Delay: 0.7655 seconds
+Average Delay per Hop: 0.3828 seconds/hop
+
+--- Reliability ---
+Packet Delivery Ratio: 0.9703
+
+===== HOP-BY-HOP METRICS =====
+
+Hop 1:
+  Distance: 787.70 units
+  Delay: 0.6351 seconds
+  Energy: 47285.69 microjoules
+
+Hop 2:
+  Distance: 30.59 units
+  Delay: 0.1304 seconds
+  Energy: 820.16 microjoules
+
+===== COMPARATIVE ANALYSIS =====
+Effect of pipe radius on performance metrics:
+
+Pipe Radius | Hop Count | Path Length | Energy | Delay | PDR
+--------------------------------------------------------
+         50 |         3 |       895.1 |  49246 | 0.927 | 0.9606
+        100 |         2 |       818.3 |  48106 | 0.766 | 0.9703
+        150 |         2 |       818.3 |  48106 | 0.766 | 0.9703
+        200 |         2 |       818.3 |  48106 | 0.766 | 0.9703
+        250 |         2 |       818.3 |  48106 | 0.766 | 0.9703
+
+===========================================
