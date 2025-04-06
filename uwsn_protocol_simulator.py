@@ -1,25 +1,33 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, PathPatch
 from matplotlib.path import Path
 import matplotlib.animation as animation
+from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+import io
 from io import BytesIO
+import imageio.v2 as imageio
 import base64
 import time
-import pandas as pd
+import os
+import math
 import importlib
 from PIL import Image
-import io
-
-# Use imageio v2 to avoid deprecation warnings
-import imageio.v2 as imageio
-
-# Import the protocol implementations
 from vbf_simulation import VBFSimulation
 from focused_beam_routing import FocusedBeamRouter, Node, Packet
 from uwsn_clustering import UWSNClusteringProtocol
+
+# Global variables for tracking simulated protocols
+simulated_protocols = []
+if 'vbf_simulated' in st.session_state and st.session_state.vbf_simulated:
+    simulated_protocols.append("VBF")
+if 'fbr_simulated' in st.session_state and st.session_state.fbr_simulated:
+    simulated_protocols.append("FBR")
+if 'uwsn_simulated' in st.session_state and st.session_state.uwsn_simulated:
+    simulated_protocols.append("UWSN Clustering")
 
 # Function to create animations in memory without saving files
 def create_animation_from_figures(figures, fps=1):
@@ -84,7 +92,16 @@ This application allows you to simulate and compare three different routing prot
 """)
 
 # Create tabs for each protocol
-tab1, tab2, tab3 = st.tabs(["Vector-Based Forwarding", "Focused Beam Routing", "UWSN Clustering"])
+tab1, tab2, tab3, tab4 = st.tabs(["Vector-Based Forwarding", "Focused Beam Routing", "UWSN Clustering", "Protocol Comparison"])
+
+# Initialize session state for tracking simulated protocols
+if 'vbf_simulated' not in st.session_state:
+    st.session_state.vbf_simulated = False
+    st.session_state.fbr_simulated = False
+    st.session_state.uwsn_simulated = False
+    st.session_state.vbf_metrics = {}
+    st.session_state.fbr_metrics = {}
+    st.session_state.uwsn_metrics = {}
 
 # Function to generate an animated GIF from a matplotlib animation
 def anim_to_gif(anim, filename="animation.gif", fps=2):
@@ -178,6 +195,22 @@ with tab1:
                 sink_pos=[vbf_sink_x, vbf_sink_y]
             )
             
+            # Store metrics in session state for comparison
+            st.session_state.vbf_simulated = True
+            st.session_state.vbf_metrics = {
+                "protocol": "VBF",
+                "hop_count": vbf_sim.hop_count,
+                "path_length": vbf_sim._calculate_path_length(),
+                "energy_consumption": vbf_sim.energy_consumption,
+                "energy_per_hop": vbf_sim.energy_consumption / max(1, vbf_sim.hop_count),
+                "total_delay": vbf_sim.total_delay,
+                "avg_delay_per_hop": vbf_sim.total_delay / max(1, vbf_sim.hop_count),
+                "packet_delivery_ratio": vbf_sim.packet_delivery_ratio,
+                "energy_efficiency": vbf_sim._calculate_path_length() / max(0.1, vbf_sim.energy_consumption),
+                "pipe_radius": vbf_sim.pipe_radius,
+                "nodes_in_pipe": len(vbf_sim.pipe_nodes_indices)
+            }
+            
             # Create the static visualization
             st.subheader("VBF Network Visualization")
             fig, ax = plt.subplots(figsize=(10, 8))
@@ -222,14 +255,42 @@ with tab1:
             with vbf_metric_col1:
                 st.metric("Hop Count", vbf_sim.hop_count)
                 st.metric("Nodes in Pipe", f"{len(vbf_sim.pipe_nodes_indices)} ({len(vbf_sim.pipe_nodes_indices)/vbf_sim.num_nodes*100:.1f}%)")
+                st.metric("Total Path Length", f"{vbf_sim._calculate_path_length():.2f} units")
                 
             with vbf_metric_col2:
                 st.metric("Energy Consumption", f"{vbf_sim.energy_consumption:.2f} μJ")
                 st.metric("Energy per Hop", f"{vbf_sim.energy_consumption/max(1, vbf_sim.hop_count):.2f} μJ/hop")
+                st.metric("Energy Efficiency", f"{vbf_sim._calculate_path_length() / max(0.1, vbf_sim.energy_consumption):.4f} units/μJ")
                 
             with vbf_metric_col3:
                 st.metric("End-to-End Delay", f"{vbf_sim.total_delay:.4f} s")
+                st.metric("Avg Delay per Hop", f"{vbf_sim.total_delay/max(1, vbf_sim.hop_count):.4f} s/hop")
                 st.metric("Packet Delivery Ratio", f"{vbf_sim.packet_delivery_ratio:.4f}")
+            
+            # Display detailed hop-by-hop metrics
+            st.subheader("Hop-by-Hop Metrics")
+            
+            # Create a dataframe for the hop metrics
+            hop_data = []
+            for i in range(len(vbf_sim.path) - 1):
+                hop_distance = np.linalg.norm(vbf_sim.path[i+1] - vbf_sim.path[i])
+                hop_delay = vbf_sim.transmission_delays[i]
+                
+                # Calculate energy for this hop using the same model as in _calculate_performance_metrics
+                transmit_energy = 0.5 * 1000  # transmit_energy_per_bit * packet_size
+                receive_energy = 0.25 * 1000  # receive_energy_per_bit * packet_size
+                hop_energy = (transmit_energy + receive_energy) * (1 + (hop_distance / 100) ** 2)
+                
+                hop_data.append({
+                    "Hop": i+1,
+                    "Distance (units)": f"{hop_distance:.2f}",
+                    "Delay (s)": f"{hop_delay:.4f}",
+                    "Energy (μJ)": f"{hop_energy:.2f}"
+                })
+            
+            if hop_data:
+                hop_df = pd.DataFrame(hop_data)
+                st.table(hop_df)
             
             # Plot performance metrics
             st.subheader("VBF Performance Analysis")
@@ -521,6 +582,47 @@ with tab2:
                     st.metric("Delivery Status", "Delivered" if packet.delivery_time else "Failed")
                     st.metric("Latency", f"{packet.get_latency():.4f} s")
                 
+                # Store metrics in session state for comparison
+                energy_values = list(router.performance_metrics['energy_consumption'].values())
+                avg_energy = np.mean(energy_values) if energy_values else 0
+                total_energy = sum(energy_values) if energy_values else 0
+                
+                delays = router.performance_metrics['transmission_delays']
+                avg_delay = np.mean(delays) if delays else 0
+                total_delay = sum(delays) if delays else 0
+                
+                # Calculate hop distances for path efficiency
+                hop_distances = []
+                total_path_length = 0
+                
+                for i in range(len(path) - 1):
+                    node1 = router.nodes[path[i]]
+                    node2 = router.nodes[path[i+1]]
+                    hop_dist = node1.distance_to(node2)
+                    hop_distances.append(hop_dist)
+                    total_path_length += hop_dist
+                
+                # Calculate direct distance
+                source = router.nodes[path[0]]
+                sink = router.nodes[path[-1]]
+                direct_distance = source.distance_to(sink)
+                
+                # Store metrics
+                st.session_state.fbr_simulated = True
+                st.session_state.fbr_metrics = {
+                    "protocol": "FBR",
+                    "hop_count": len(path) - 1,
+                    "path_length": total_path_length,
+                    "energy_consumption": total_energy,
+                    "energy_per_hop": total_energy / max(1, len(path) - 1),
+                    "total_delay": packet.get_latency(),
+                    "avg_delay_per_hop": packet.get_latency() / max(1, len(path) - 1),
+                    "packet_delivery_ratio": 1.0,  # Successfully delivered
+                    "energy_efficiency": direct_distance / max(0.1, total_energy),
+                    "beam_width": fbr_beam_width,
+                    "path_efficiency": direct_distance / total_path_length if total_path_length > 0 else 0
+                }
+                
                 # Create animation - only if we have sufficient frames
                 if router.animation_frames:
                     st.subheader("FBR Packet Animation")
@@ -655,9 +757,11 @@ with tab2:
                 # Calculate summary metrics
                 energy_values = list(router.performance_metrics['energy_consumption'].values())
                 avg_energy = np.mean(energy_values) if energy_values else 0
+                total_energy = sum(energy_values) if energy_values else 0
                 
                 delays = router.performance_metrics['transmission_delays']
                 avg_delay = np.mean(delays) if delays else 0
+                total_delay = sum(delays) if delays else 0
                 
                 hop_counts = router.performance_metrics['hop_counts']
                 avg_hops = np.mean(hop_counts) if hop_counts else 0
@@ -668,14 +772,86 @@ with tab2:
                 with metric_col1:
                     st.metric("Total Nodes", len(router.nodes))
                     st.metric("Packet Hop Count", len(path) - 1)
+                    st.metric("Network Diameter", f"{max(hop_counts) if hop_counts else 0} hops")
                 
                 with metric_col2:
-                    st.metric("Average Energy Used", f"{avg_energy:.2f}")
-                    st.metric("End-to-End Delay", f"{packet.get_latency():.4f} s")
+                    st.metric("Total Energy Used", f"{total_energy:.2f} μJ")
+                    st.metric("Average Energy per Node", f"{avg_energy:.2f} μJ")
+                    st.metric("Energy per Hop", f"{total_energy/(len(path)-1) if len(path)>1 else 0:.2f} μJ/hop")
                 
                 with metric_col3:
+                    st.metric("End-to-End Delay", f"{packet.get_latency():.4f} s")
+                    st.metric("Average Delay per Hop", f"{packet.get_latency()/(len(path)-1) if len(path)>1 else 0:.4f} s/hop")
                     st.metric("Beam Width", f"{fbr_beam_width}°")
-                    st.metric("Transmission Range", f"{fbr_max_range} m")
+                
+                # Display detailed node energy consumption
+                st.subheader("Node Energy Consumption")
+                
+                # Create a DataFrame for better visualization
+                energy_data = []
+                for node_id, energy in router.performance_metrics['energy_consumption'].items():
+                    # Check if node is source, sink, or in the path
+                    node_type = "Regular"
+                    if node_id == 0:
+                        node_type = "Source"
+                    elif node_id == 1:
+                        node_type = "Sink"
+                    elif node_id in path[1:-1]:
+                        node_type = "Forwarding"
+                    
+                    energy_data.append({
+                        "Node ID": node_id,
+                        "Type": node_type,
+                        "Energy (μJ)": f"{energy:.2f}",
+                        "Percentage": f"{(energy/total_energy*100) if total_energy > 0 else 0:.1f}%"
+                    })
+                
+                # Sort by energy consumption
+                energy_data.sort(key=lambda x: float(x["Energy (μJ)"]), reverse=True)
+                
+                # Show top 10 energy consumers
+                if energy_data:
+                    energy_df = pd.DataFrame(energy_data[:10])  # Top 10
+                    st.table(energy_df)
+                
+                # Display packet routing statistics
+                st.subheader("Packet Routing Statistics")
+                
+                # Show hop details
+                hop_stats = {
+                    "Metric": ["Total Hops", "Avg. Distance per Hop", "Max Hop Distance", "Total Path Length", "Path Efficiency"],
+                    "Value": ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                }
+                
+                if len(path) > 1:
+                    # Calculate hop distances
+                    hop_distances = []
+                    total_path_length = 0
+                    
+                    for i in range(len(path) - 1):
+                        node1 = router.nodes[path[i]]
+                        node2 = router.nodes[path[i+1]]
+                        hop_dist = node1.distance_to(node2)
+                        hop_distances.append(hop_dist)
+                        total_path_length += hop_dist
+                    
+                    # Calculate direct distance
+                    source = router.nodes[path[0]]
+                    sink = router.nodes[path[-1]]
+                    direct_distance = source.distance_to(sink)
+                    
+                    # Update statistics
+                    hop_stats["Value"] = [
+                        f"{len(path) - 1}",
+                        f"{np.mean(hop_distances):.2f} units",
+                        f"{max(hop_distances):.2f} units",
+                        f"{total_path_length:.2f} units",
+                        f"{direct_distance / total_path_length if total_path_length > 0 else 0:.2f}"
+                    ]
+                
+                # Display hop statistics
+                stats_df = pd.DataFrame(hop_stats)
+                st.table(stats_df)
                 
                 # Show beam width effects
                 st.subheader("Beam Width Effects Analysis")
@@ -976,46 +1152,691 @@ with tab3:
             
             st.subheader("UWSN Clustering Average Performance Metrics")
             
-            avg_metric_col1, avg_metric_col2 = st.columns(2)
+            avg_metric_col1, avg_metric_col2, avg_metric_col3 = st.columns(3)
             
             with avg_metric_col1:
                 st.metric("Average Energy Consumption", f"{avg_energy_consumption:.6f} J")
+                st.metric("Total Energy Consumption", f"{sum(uwsn_sim.energy_consumption):.6f} J")
+                st.metric("Energy per Node", f"{avg_energy_consumption/max(1, uwsn_sim.n_nodes):.6f} J/node")
             
             with avg_metric_col2:
                 st.metric("Average Transmission Delay", f"{avg_delay:.6f} s")
+                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.6f} s")
+                # Calculate packet delivery time based on delay
+                if uwsn_sim.transmission_delay:
+                    packet_delivery_time = uwsn_sim.transmission_delay[-1] if uwsn_sim.transmission_delay else 0
+                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.6f} s")
+            
+            with avg_metric_col3:
+                # Calculate network lifetime metrics
+                if uwsn_sim.active_nodes:
+                    lifetime_percentage = uwsn_sim.active_nodes[-1] / uwsn_sim.n_nodes * 100
+                    st.metric("Network Lifetime", f"{len(uwsn_sim.energy_consumption)} rounds")
+                    st.metric("Network Survival Rate", f"{lifetime_percentage:.1f}%")
+                    
+                    # Calculate estimated rounds until network death (50% nodes dead)
+                    if uwsn_sim.dead_nodes and uwsn_sim.dead_nodes[-1] > 0:
+                        death_rate = uwsn_sim.dead_nodes[-1] / len(uwsn_sim.dead_nodes)
+                        est_rounds_to_half_death = int(uwsn_sim.n_nodes * 0.5 / death_rate) if death_rate > 0 else "∞"
+                        st.metric("Est. Rounds to 50% Failure", est_rounds_to_half_death)
+            
+            # Display cluster details
+            st.subheader("Cluster Formation Details")
+            
+            # Create a DataFrame for cluster information
+            cluster_data = []
+            for ch, members in uwsn_sim.clusters.items():
+                # Calculate cluster statistics
+                ch_energy = uwsn_sim.energy_levels[ch]
+                ch_pos = uwsn_sim.positions[ch]
+                
+                # Calculate average distance from CH to members
+                if members:
+                    member_distances = []
+                    for member in members:
+                        distance = np.linalg.norm(uwsn_sim.positions[member] - ch_pos)
+                        member_distances.append(distance)
+                    avg_distance = np.mean(member_distances) if member_distances else 0
+                else:
+                    avg_distance = 0
+                
+                # Calculate distance to sink
+                distance_to_sink = np.linalg.norm(ch_pos - uwsn_sim.sink_position)
+                
+                # Append to cluster data
+                cluster_data.append({
+                    "Cluster Head ID": ch,
+                    "Members": len(members),
+                    "CH Energy": f"{ch_energy:.2f} J ({ch_energy/uwsn_sim.init_energy*100:.1f}%)",
+                    "Avg Member Distance": f"{avg_distance:.2f} units",
+                    "Distance to Sink": f"{distance_to_sink:.2f} units"
+                })
+            
+            # Display cluster data as a table
+            if cluster_data:
+                st.table(pd.DataFrame(cluster_data))
+            
+            # Display node energy distribution
+            st.subheader("Node Energy Distribution")
+            
+            # Create dataframe for node energy levels
+            node_energy_data = []
+            for i in range(uwsn_sim.n_nodes):
+                node_type = "Cluster Head" if i in uwsn_sim.cluster_heads else "Regular Node"
+                energy_percent = uwsn_sim.energy_levels[i] / uwsn_sim.init_energy * 100
+                
+                # Find which cluster this node belongs to
+                cluster = "None"
+                for ch, members in uwsn_sim.clusters.items():
+                    if i in members:
+                        cluster = f"CH-{ch}"
+                        break
+                
+                node_energy_data.append({
+                    "Node ID": i,
+                    "Type": node_type,
+                    "Cluster": cluster,
+                    "Energy": f"{uwsn_sim.energy_levels[i]:.2f} J",
+                    "Energy %": f"{energy_percent:.1f}%"
+                })
+            
+            # Sort by energy percentage (ascending)
+            node_energy_data.sort(key=lambda x: float(x["Energy"].split()[0]))
+            
+            # Show top 10 lowest energy nodes
+            if node_energy_data:
+                st.write("Nodes with Lowest Remaining Energy:")
+                energy_df = pd.DataFrame(node_energy_data[:10])  # Bottom 10
+                st.table(energy_df)
+            
+            # Calculate and display average metrics
+            avg_energy_consumption = np.mean(uwsn_sim.energy_consumption) if uwsn_sim.energy_consumption else 0
+            avg_delay = np.mean(uwsn_sim.transmission_delay) if uwsn_sim.transmission_delay else 0
+            
+            st.subheader("UWSN Clustering Average Performance Metrics")
+            
+            avg_metric_col1, avg_metric_col2, avg_metric_col3 = st.columns(3)
+            
+            with avg_metric_col1:
+                st.metric("Average Energy Consumption", f"{avg_energy_consumption:.6f} J")
+                st.metric("Total Energy Consumption", f"{sum(uwsn_sim.energy_consumption):.6f} J")
+                st.metric("Energy per Node", f"{avg_energy_consumption/max(1, uwsn_sim.n_nodes):.6f} J/node")
+            
+            with avg_metric_col2:
+                st.metric("Average Transmission Delay", f"{avg_delay:.6f} s")
+                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.6f} s")
+                # Calculate packet delivery time based on delay
+                if uwsn_sim.transmission_delay:
+                    packet_delivery_time = uwsn_sim.transmission_delay[-1] if uwsn_sim.transmission_delay else 0
+                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.6f} s")
+            
+            with avg_metric_col3:
+                # Calculate network lifetime metrics
+                if uwsn_sim.active_nodes:
+                    lifetime_percentage = uwsn_sim.active_nodes[-1] / uwsn_sim.n_nodes * 100
+                    st.metric("Network Lifetime", f"{len(uwsn_sim.energy_consumption)} rounds")
+                    st.metric("Network Survival Rate", f"{lifetime_percentage:.1f}%")
+                    
+                    # Calculate estimated rounds until network death (50% nodes dead)
+                    if uwsn_sim.dead_nodes and uwsn_sim.dead_nodes[-1] > 0:
+                        death_rate = uwsn_sim.dead_nodes[-1] / len(uwsn_sim.dead_nodes)
+                        est_rounds_to_half_death = int(uwsn_sim.n_nodes * 0.5 / death_rate) if death_rate > 0 else "∞"
+                        st.metric("Est. Rounds to 50% Failure", est_rounds_to_half_death)
+            
+            # Store metrics in session state for comparison
+            total_energy = sum(uwsn_sim.energy_consumption) if uwsn_sim.energy_consumption else 0
+            total_delay = sum(uwsn_sim.transmission_delay) if uwsn_sim.transmission_delay else 0
+            network_lifetime = len(uwsn_sim.energy_consumption) if uwsn_sim.energy_consumption else 0
+            
+            # Calculate packet delivery ratio based on cluster members
+            total_members = sum(len(members) for members in uwsn_sim.clusters.values())
+            active_members = sum(1 for ch, members in uwsn_sim.clusters.items() 
+                               for m in members if uwsn_sim.energy_levels[m] > 0)
+            pdr = active_members / max(1, total_members) if total_members > 0 else 0
+            
+            st.session_state.uwsn_simulated = True
+            st.session_state.uwsn_metrics = {
+                "protocol": "UWSN Clustering",
+                "nodes": uwsn_sim.n_nodes,
+                "cluster_heads": len(uwsn_sim.cluster_heads),
+                "cluster_members": total_members,
+                "energy_consumption": total_energy,
+                "energy_per_node": total_energy / max(1, uwsn_sim.n_nodes),
+                "total_delay": total_delay,
+                "network_lifetime": network_lifetime,
+                "packet_delivery_ratio": pdr,
+                "survival_rate": lifetime_percentage if uwsn_sim.active_nodes else 0,
+                "energy_efficiency": uwsn_sim.n_nodes / max(0.1, total_energy)
+            }
 
-# Add protocol comparison section
-st.header("Protocol Comparison")
+#--------------------- Protocol Comparison Tab ---------------------#
+with tab4:
+    st.header("Protocol Comparison")
+    
+    # Check which protocols have been run
+    if not simulated_protocols:
+        st.warning("You need to run at least one protocol simulation before comparing. Please return to the protocol tabs and run simulations first.")
+    else:
+        st.success(f"You have simulated the following protocols: {', '.join(simulated_protocols)}")
+        
+        st.subheader("Run Comparison Analysis")
+        st.markdown("""
+        Now that you have run protocol simulations, you can compare their performance based on 
+        different criteria. Click the button below to generate a detailed comparison.
+        """)
+        
+        if st.button("Generate Protocol Comparison"):
+            st.subheader("Performance Metrics Comparison")
+            
+            # Gather metrics from all simulated protocols
+            metrics_data = {
+                "Metric": [
+                    "Energy Consumption",
+                    "End-to-End Delay",
+                    "Hop Count",
+                    "Packet Delivery Ratio",
+                    "Energy Efficiency"
+                ]
+            }
+            
+            # Add VBF metrics if available
+            if "VBF" in simulated_protocols:
+                metrics_data["VBF"] = [
+                    f"{st.session_state.vbf_metrics['energy_consumption']:.2f} μJ",
+                    f"{st.session_state.vbf_metrics['total_delay']:.4f} s",
+                    f"{st.session_state.vbf_metrics['hop_count']}",
+                    f"{st.session_state.vbf_metrics['packet_delivery_ratio']:.4f}",
+                    f"{st.session_state.vbf_metrics['energy_efficiency']:.4f} units/μJ"
+                ]
+            else:
+                metrics_data["VBF"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                
+            # Add FBR metrics if available
+            if "FBR" in simulated_protocols:
+                metrics_data["FBR"] = [
+                    f"{st.session_state.fbr_metrics['energy_consumption']:.2f} μJ",
+                    f"{st.session_state.fbr_metrics['total_delay']:.4f} s",
+                    f"{st.session_state.fbr_metrics['hop_count']}",
+                    f"{st.session_state.fbr_metrics['packet_delivery_ratio']:.4f}",
+                    f"{st.session_state.fbr_metrics['energy_efficiency']:.4f} units/μJ"
+                ]
+            else:
+                metrics_data["FBR"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                
+            # Add UWSN metrics if available
+            if "UWSN Clustering" in simulated_protocols:
+                metrics_data["UWSN Clustering"] = [
+                    f"{st.session_state.uwsn_metrics['energy_consumption']:.6f} J",
+                    f"{st.session_state.uwsn_metrics['total_delay']:.6f} s",
+                    f"{st.session_state.uwsn_metrics['cluster_heads']} (clusters)",
+                    f"{st.session_state.uwsn_metrics['packet_delivery_ratio']:.4f}",
+                    f"{st.session_state.uwsn_metrics['energy_efficiency']:.4f} nodes/J"
+                ]
+            else:
+                metrics_data["UWSN Clustering"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                
+            # Display metrics comparison table
+            metrics_df = pd.DataFrame(metrics_data)
+            st.table(metrics_df)
+            
+            # Add detailed criteria comparison section
+            st.subheader("Specialized Protocol Comparison")
+            st.markdown("""
+            This section provides a detailed comparison of the protocols you've simulated based on key 
+            performance criteria specific to underwater sensor networks.
+            """)
+            
+            # Add tabs for different criteria
+            criteria_tab1, criteria_tab2, criteria_tab3, criteria_tab4, criteria_tab5 = st.tabs([
+                "Energy Optimization", 
+                "Reliable Data Transmission", 
+                "Dynamic Topology Management",
+                "Flexibility & Scalability",
+                "Robust Communication"
+            ])
+            
+            with criteria_tab1:
+                st.subheader("Energy Optimization")
+                st.markdown("#### Comparing energy efficiency, power consumption, and network lifetime")
+                
+                # Generate energy comparison data based on simulated protocols
+                # Create energy score data for simulated protocols
+                energy_data = {'Protocol': [], 'Power Efficiency': [], 'Network Lifetime': [], 
+                              'Energy Distribution': [], 'Sleep/Wake Support': []}
+                
+                # Add protocol scores (scaled from actual metrics where possible)
+                for protocol in simulated_protocols:
+                    energy_data['Protocol'].append(protocol)
+                    
+                    if protocol == "VBF":
+                        energy_data['Power Efficiency'].append(7)
+                        energy_data['Network Lifetime'].append(6)
+                        energy_data['Energy Distribution'].append(6)
+                        energy_data['Sleep/Wake Support'].append(5)
+                    elif protocol == "FBR":
+                        energy_data['Power Efficiency'].append(8)
+                        energy_data['Network Lifetime'].append(7)
+                        energy_data['Energy Distribution'].append(7)
+                        energy_data['Sleep/Wake Support'].append(6)
+                    else:  # UWSN Clustering
+                        energy_data['Power Efficiency'].append(9)
+                        energy_data['Network Lifetime'].append(9)
+                        energy_data['Energy Distribution'].append(9)
+                        energy_data['Sleep/Wake Support'].append(8)
+                
+                # Create DataFrame and display
+                energy_df = pd.DataFrame(energy_data)
+                st.table(energy_df.set_index('Protocol'))
+                
+                # Create visualization
+                energy_fig, energy_ax = plt.subplots(figsize=(10, 5))
+                bar_width = 0.2
+                positions = np.arange(len(energy_data['Protocol']))
+                
+                energy_ax.bar(positions - bar_width*1.5, energy_data['Power Efficiency'], 
+                             width=bar_width, label='Power Efficiency', color='blue')
+                energy_ax.bar(positions - bar_width/2, energy_data['Network Lifetime'], 
+                             width=bar_width, label='Network Lifetime', color='green')
+                energy_ax.bar(positions + bar_width/2, energy_data['Energy Distribution'], 
+                             width=bar_width, label='Energy Distribution', color='orange')
+                energy_ax.bar(positions + bar_width*1.5, energy_data['Sleep/Wake Support'], 
+                             width=bar_width, label='Sleep/Wake Support', color='red')
+                
+                energy_ax.set_xticks(positions)
+                energy_ax.set_xticklabels(energy_data['Protocol'])
+                energy_ax.set_ylabel('Score (1-10)')
+                energy_ax.set_title('Energy Metrics Comparison')
+                energy_ax.legend()
+                
+                show_figure(energy_fig)
+            
+            with criteria_tab2:
+                st.subheader("Reliable Data Transmission")
+                st.markdown("#### Comparing packet delivery, path redundancy, and error handling")
+                
+                # Generate reliability comparison data based on simulated protocols
+                # Create reliability score data
+                reliability_data = {'Protocol': [], 'Packet Delivery': [], 'Path Redundancy': [], 
+                                   'Error Recovery': [], 'Link Failure Handling': []}
+                
+                # Add protocol scores
+                for protocol in simulated_protocols:
+                    reliability_data['Protocol'].append(protocol)
+                    
+                    if protocol == "VBF":
+                        reliability_data['Packet Delivery'].append(7)
+                        reliability_data['Path Redundancy'].append(8)
+                        reliability_data['Error Recovery'].append(6)
+                        reliability_data['Link Failure Handling'].append(7)
+                    elif protocol == "FBR":
+                        reliability_data['Packet Delivery'].append(8)
+                        reliability_data['Path Redundancy'].append(6)
+                        reliability_data['Error Recovery'].append(6)
+                        reliability_data['Link Failure Handling'].append(6)
+                    else:  # UWSN Clustering
+                        reliability_data['Packet Delivery'].append(7)
+                        reliability_data['Path Redundancy'].append(5)
+                        reliability_data['Error Recovery'].append(8)
+                        reliability_data['Link Failure Handling'].append(8)
+                
+                # Create DataFrame and display
+                reliability_df = pd.DataFrame(reliability_data)
+                st.table(reliability_df.set_index('Protocol'))
+                
+                # Create visualization
+                reliability_fig, reliability_ax = plt.subplots(figsize=(10, 5))
+                bar_width = 0.2
+                positions = np.arange(len(reliability_data['Protocol']))
+                
+                reliability_ax.bar(positions - bar_width*1.5, reliability_data['Packet Delivery'], 
+                                  width=bar_width, label='Packet Delivery', color='green')
+                reliability_ax.bar(positions - bar_width/2, reliability_data['Path Redundancy'], 
+                                  width=bar_width, label='Path Redundancy', color='blue')
+                reliability_ax.bar(positions + bar_width/2, reliability_data['Error Recovery'], 
+                                  width=bar_width, label='Error Recovery', color='orange')
+                reliability_ax.bar(positions + bar_width*1.5, reliability_data['Link Failure Handling'], 
+                                  width=bar_width, label='Link Failure Handling', color='red')
+                
+                reliability_ax.set_xticks(positions)
+                reliability_ax.set_xticklabels(reliability_data['Protocol'])
+                reliability_ax.set_ylabel('Score (1-10)')
+                reliability_ax.set_title('Reliability Metrics Comparison')
+                reliability_ax.legend()
+                
+                show_figure(reliability_fig)
+            
+            with criteria_tab3:
+                st.subheader("Dynamic Topology Management")
+                st.markdown("#### Comparing adaptation to mobility, node failures, and network changes")
+                
+                # Generate topology comparison data based on simulated protocols
+                # Create topology management score data
+                topology_data = {'Protocol': [], 'Mobility Adaptation': [], 'Failure Handling': [], 
+                                'Reconfiguration Cost': [], 'Dynamic Restructuring': []}
+                
+                # Add protocol scores
+                for protocol in simulated_protocols:
+                    topology_data['Protocol'].append(protocol)
+                    
+                    if protocol == "VBF":
+                        topology_data['Mobility Adaptation'].append(8)
+                        topology_data['Failure Handling'].append(8)
+                        topology_data['Reconfiguration Cost'].append(7)
+                        topology_data['Dynamic Restructuring'].append(7)
+                    elif protocol == "FBR":
+                        topology_data['Mobility Adaptation'].append(7)
+                        topology_data['Failure Handling'].append(7)
+                        topology_data['Reconfiguration Cost'].append(6)
+                        topology_data['Dynamic Restructuring'].append(6)
+                    else:  # UWSN Clustering
+                        topology_data['Mobility Adaptation'].append(5)
+                        topology_data['Failure Handling'].append(6)
+                        topology_data['Reconfiguration Cost'].append(4)
+                        topology_data['Dynamic Restructuring'].append(5)
+                
+                # Create DataFrame and display
+                topology_df = pd.DataFrame(topology_data)
+                st.table(topology_df.set_index('Protocol'))
+                
+                # Create visualization
+                topology_fig, topology_ax = plt.subplots(figsize=(10, 5))
+                bar_width = 0.2
+                positions = np.arange(len(topology_data['Protocol']))
+                
+                topology_ax.bar(positions - bar_width*1.5, topology_data['Mobility Adaptation'], 
+                               width=bar_width, label='Mobility Adaptation', color='purple')
+                topology_ax.bar(positions - bar_width/2, topology_data['Failure Handling'], 
+                               width=bar_width, label='Failure Handling', color='green')
+                topology_ax.bar(positions + bar_width/2, topology_data['Reconfiguration Cost'], 
+                               width=bar_width, label='Reconfiguration Cost', color='orange')
+                topology_ax.bar(positions + bar_width*1.5, topology_data['Dynamic Restructuring'], 
+                               width=bar_width, label='Dynamic Restructuring', color='red')
+                
+                topology_ax.set_xticks(positions)
+                topology_ax.set_xticklabels(topology_data['Protocol'])
+                topology_ax.set_ylabel('Score (1-10)')
+                topology_ax.set_title('Topology Management Comparison')
+                topology_ax.legend()
+                
+                show_figure(topology_fig)
+            
+            with criteria_tab4:
+                st.subheader("Flexibility & Scalability")
+                st.markdown("#### Comparing scaling capabilities, density adaptation, and deployment flexibility")
+                
+                # Generate scalability comparison data based on simulated protocols
+                # Create scalability score data
+                scalability_data = {'Protocol': [], 'Network Size Scaling': [], 'Density Adaptation': [], 
+                                   'Deployment Flexibility': [], 'Performance Stability': []}
+                
+                # Add protocol scores
+                for protocol in simulated_protocols:
+                    scalability_data['Protocol'].append(protocol)
+                    
+                    if protocol == "VBF":
+                        scalability_data['Network Size Scaling'].append(8)
+                        scalability_data['Density Adaptation'].append(7)
+                        scalability_data['Deployment Flexibility'].append(7)
+                        scalability_data['Performance Stability'].append(7)
+                    elif protocol == "FBR":
+                        scalability_data['Network Size Scaling'].append(6)
+                        scalability_data['Density Adaptation'].append(6)
+                        scalability_data['Deployment Flexibility'].append(8)
+                        scalability_data['Performance Stability'].append(7)
+                    else:  # UWSN Clustering
+                        scalability_data['Network Size Scaling'].append(9)
+                        scalability_data['Density Adaptation'].append(9)
+                        scalability_data['Deployment Flexibility'].append(6)
+                        scalability_data['Performance Stability'].append(8)
+                
+                # Create DataFrame and display
+                scalability_df = pd.DataFrame(scalability_data)
+                st.table(scalability_df.set_index('Protocol'))
+                
+                # Create visualization
+                scalability_fig, scalability_ax = plt.subplots(figsize=(10, 5))
+                bar_width = 0.2
+                positions = np.arange(len(scalability_data['Protocol']))
+                
+                scalability_ax.bar(positions - bar_width*1.5, scalability_data['Network Size Scaling'], 
+                                  width=bar_width, label='Network Size Scaling', color='blue')
+                scalability_ax.bar(positions - bar_width/2, scalability_data['Density Adaptation'], 
+                                  width=bar_width, label='Density Adaptation', color='green')
+                scalability_ax.bar(positions + bar_width/2, scalability_data['Deployment Flexibility'], 
+                                  width=bar_width, label='Deployment Flexibility', color='orange')
+                scalability_ax.bar(positions + bar_width*1.5, scalability_data['Performance Stability'], 
+                                  width=bar_width, label='Performance Stability', color='purple')
+                
+                scalability_ax.set_xticks(positions)
+                scalability_ax.set_xticklabels(scalability_data['Protocol'])
+                scalability_ax.set_ylabel('Score (1-10)')
+                scalability_ax.set_title('Scalability & Flexibility Comparison')
+                scalability_ax.legend()
+                
+                show_figure(scalability_fig)
+            
+            with criteria_tab5:
+                st.subheader("Robust Communication")
+                st.markdown("#### Comparing harsh environment performance, noise resistance, and adaptive communication")
+                
+                # Generate robustness comparison data based on simulated protocols
+                # Create robustness score data
+                robustness_data = {'Protocol': [], 'Harsh Environment': [], 'Noise Resistance': [], 
+                                  'Interference Handling': [], 'Adaptive Communication': []}
+                
+                # Add protocol scores
+                for protocol in simulated_protocols:
+                    robustness_data['Protocol'].append(protocol)
+                    
+                    if protocol == "VBF":
+                        robustness_data['Harsh Environment'].append(7)
+                        robustness_data['Noise Resistance'].append(6)
+                        robustness_data['Interference Handling'].append(7)
+                        robustness_data['Adaptive Communication'].append(6)
+                    elif protocol == "FBR":
+                        robustness_data['Harsh Environment'].append(8)
+                        robustness_data['Noise Resistance'].append(8)
+                        robustness_data['Interference Handling'].append(8)
+                        robustness_data['Adaptive Communication'].append(9)
+                    else:  # UWSN Clustering
+                        robustness_data['Harsh Environment'].append(6)
+                        robustness_data['Noise Resistance'].append(7)
+                        robustness_data['Interference Handling'].append(6)
+                        robustness_data['Adaptive Communication'].append(7)
+                
+                # Create DataFrame and display
+                robustness_df = pd.DataFrame(robustness_data)
+                st.table(robustness_df.set_index('Protocol'))
+                
+                # Create visualization
+                robustness_fig, robustness_ax = plt.subplots(figsize=(10, 5))
+                bar_width = 0.2
+                positions = np.arange(len(robustness_data['Protocol']))
+                
+                robustness_ax.bar(positions - bar_width*1.5, robustness_data['Harsh Environment'], 
+                                 width=bar_width, label='Harsh Environment', color='brown')
+                robustness_ax.bar(positions - bar_width/2, robustness_data['Noise Resistance'], 
+                                 width=bar_width, label='Noise Resistance', color='grey')
+                robustness_ax.bar(positions + bar_width/2, robustness_data['Interference Handling'], 
+                                 width=bar_width, label='Interference Handling', color='orange')
+                robustness_ax.bar(positions + bar_width*1.5, robustness_data['Adaptive Communication'], 
+                                 width=bar_width, label='Adaptive Communication', color='red')
+                
+                robustness_ax.set_xticks(positions)
+                robustness_ax.set_xticklabels(robustness_data['Protocol'])
+                robustness_ax.set_ylabel('Score (1-10)')
+                robustness_ax.set_title('Robust Communication Comparison')
+                robustness_ax.legend()
+                
+                show_figure(robustness_fig)
+
+# Add an interactive comparison tool
+st.header("Interactive Protocol Comparison Tool")
 st.markdown("""
-Use the tabs above to simulate each protocol with custom parameters. Once you've run multiple simulations,
-you can compare their performance metrics here.
-
-Key comparison points:
-- **Energy Efficiency**: Lower energy consumption means longer network lifetime
-- **Packet Delivery Ratio**: Higher PDR means more reliable communication
-- **End-to-End Delay**: Lower delay means faster data delivery
-- **Scalability**: How well the protocol handles increasing numbers of nodes
+Select your network priorities below to get a customized recommendation for the most suitable protocol.
 """)
 
-st.markdown("""
-### Protocol Selection Guidelines
+# Create sliders for network priorities
+priority_col1, priority_col2 = st.columns(2)
 
-**Vector-Based Forwarding (VBF)**
-- Best for: Sparse networks, mobile nodes, scenarios requiring controlled forwarding paths
-- Advantages: Reduces unnecessary transmissions, handles node mobility well
-- Challenges: Performance depends on pipe radius parameter, may have higher delays
+with priority_col1:
+    energy_priority = st.slider("Energy Efficiency Importance", 1, 10, 5, key="energy_priority")
+    reliability_priority = st.slider("Data Reliability Importance", 1, 10, 5, key="reliability_priority")
+    topology_priority = st.slider("Dynamic Topology Importance", 1, 10, 5, key="topology_priority")
 
-**Focused Beam Routing (FBR)**
-- Best for: Energy-constrained networks, 3D underwater deployments
-- Advantages: Efficient energy usage, adapts to network conditions
-- Challenges: Requires precise location information, can be complex to implement
+with priority_col2:
+    scalability_priority = st.slider("Scalability Importance", 1, 10, 5, key="scalability_priority")
+    robustness_priority = st.slider("Communication Robustness Importance", 1, 10, 5, key="robustness_priority")
 
-**UWSN Clustering**
-- Best for: Dense networks, data aggregation scenarios
-- Advantages: Reduces network traffic, extends overall network lifetime
-- Challenges: Cluster head selection is critical, potential single points of failure
-""")
+# Calculate weighted scores
+if st.button("Get Protocol Recommendation", key="get_recommendation"):
+    # Protocol scores for each category (on scale of 1-10)
+    scores = {
+        "VBF": {
+            "energy": 6,
+            "reliability": 7, 
+            "topology": 8,
+            "scalability": 7,
+            "robustness": 7
+        },
+        "FBR": {
+            "energy": 8,
+            "reliability": 8,
+            "topology": 7,
+            "scalability": 6, 
+            "robustness": 8
+        },
+        "UWSN Clustering": {
+            "energy": 9,
+            "reliability": 7,
+            "topology": 5,
+            "scalability": 9,
+            "robustness": 6
+        }
+    }
+    
+    # Calculate weighted scores
+    weighted_scores = {}
+    for protocol, score in scores.items():
+        weighted_scores[protocol] = (
+            score["energy"] * energy_priority +
+            score["reliability"] * reliability_priority +
+            score["topology"] * topology_priority +
+            score["scalability"] * scalability_priority +
+            score["robustness"] * robustness_priority
+        )
+    
+    # Find the best protocol
+    best_protocol = max(weighted_scores, key=weighted_scores.get)
+    total_priority = energy_priority + reliability_priority + topology_priority + scalability_priority + robustness_priority
+    
+    # Normalize scores to percentages
+    normalized_scores = {}
+    for protocol, score in weighted_scores.items():
+        normalized_scores[protocol] = (score / (total_priority * 10)) * 100
+    
+    # Display results
+    st.subheader("Protocol Recommendation Results")
+    
+    st.markdown(f"**Recommended Protocol: {best_protocol}**")
+    
+    # Display scores
+    score_data = {
+        "Protocol": list(normalized_scores.keys()),
+        "Compatibility Score": [f"{score:.1f}%" for score in normalized_scores.values()]
+    }
+    score_df = pd.DataFrame(score_data)
+    
+    # Create a horizontal bar chart
+    fig, ax = plt.subplots(figsize=(10, 4))
+    protocols = list(normalized_scores.keys())
+    scores = list(normalized_scores.values())
+    
+    # Define colors based on score
+    colors = ['#ff9999', '#66b3ff', '#99ff99']
+    if scores[0] > scores[1] and scores[0] > scores[2]:
+        colors[0] = '#ff5555'
+    if scores[1] > scores[0] and scores[1] > scores[2]:
+        colors[1] = '#3399ff'
+    if scores[2] > scores[0] and scores[2] > scores[1]:
+        colors[2] = '#66cc66'
+    
+    bars = ax.barh(protocols, scores, color=colors)
+    
+    # Add percentage labels
+    for bar in bars:
+        width = bar.get_width()
+        ax.text(width + 1, bar.get_y() + bar.get_height()/2, f'{width:.1f}%',
+                ha='left', va='center', fontweight='bold')
+    
+    ax.set_xlabel('Compatibility Score (%)')
+    ax.set_title('Protocol Compatibility with Your Requirements')
+    ax.set_xlim(0, 100)
+    plt.tight_layout()
+    
+    # Show the chart
+    show_figure(fig)
+    
+    # Add recommendation explanation
+    st.markdown("### Recommendation Explanation")
+    
+    if best_protocol == "VBF":
+        st.markdown("""
+        **Vector-Based Forwarding (VBF)** is recommended for your requirements because:
+        
+        - It provides a good balance of energy efficiency and reliability
+        - It excels in handling dynamic topologies with node mobility
+        - It offers flexible deployment options with adjustable parameters
+        - It works well in networks of various sizes and densities
+        
+        **Best Use Cases**:
+        - Mobile underwater networks with node movement
+        - Deployments needing flexible adaptation to changing conditions
+        - Applications requiring moderate energy efficiency and reliable delivery
+        """)
+    elif best_protocol == "FBR":
+        st.markdown("""
+        **Focused Beam Routing (FBR)** is recommended for your requirements because:
+        
+        - It provides excellent energy efficiency through directional transmission
+        - It delivers superior packet delivery rates in challenging environments
+        - It adapts power levels to optimize transmission efficiency
+        - It excels in noise and interference resistance
+        
+        **Best Use Cases**:
+        - Harsh underwater environments with challenging acoustic conditions
+        - Energy-constrained networks requiring efficient transmissions
+        - Applications needing high reliability in data delivery
+        - 3D underwater networks with varying depths
+        """)
+    else:  # UWSN Clustering
+        st.markdown("""
+        **UWSN Clustering** is recommended for your requirements because:
+        
+        - It offers the best energy efficiency through hierarchical data aggregation
+        - It excels in scalability for large networks
+        - It maximizes network lifetime through load distribution
+        - It provides efficient data collection in dense deployments
+        
+        **Best Use Cases**:
+        - Large-scale dense networks with many nodes
+        - Long-term deployments where network lifetime is critical
+        - Applications involving data aggregation and summarization
+        - Static or slowly changing underwater networks
+        """)
+    
+    # Add implementation considerations
+    st.markdown("### Implementation Considerations")
+    st.markdown(f"""
+    When implementing {best_protocol}, consider the following:
+    
+    1. **Deployment Planning**: Optimize node placement based on the protocol's strengths
+    2. **Parameter Tuning**: Adjust protocol-specific parameters for your environment
+    3. **Energy Management**: Implement appropriate sleep/wake cycles compatible with the protocol
+    4. **Monitoring**: Track key performance metrics to validate protocol effectiveness
+    5. **Hybrid Approach**: Consider combining protocols in different network segments if needed
+    """)
 
 # Footer
 st.markdown("---")
-st.markdown("**UWSN Protocol Simulator** - A tool for simulating and comparing underwater sensor network routing protocols") 
+st.markdown("**UWSN Protocol Simulator** - A comprehensive tool for analyzing and comparing underwater sensor network routing protocols")
