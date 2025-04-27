@@ -117,6 +117,27 @@ def fig_to_html(fig):
     data = base64.b64encode(buf.getbuffer()).decode("ascii")
     return f'<img src="data:image/png;base64,{data}"/>'
 
+# Function to calculate throughput (new function)
+def calculate_throughput(packet_size, transmission_time, hop_count=1):
+    """Calculate throughput in bits per second (bps)"""
+    # Default packet size is 1000 bits if not provided
+    if packet_size is None:
+        packet_size = 1000
+    # Ensure we don't divide by zero
+    if transmission_time <= 0:
+        return 0
+    # Convert transmission time from milliseconds to seconds for bps calculation
+    transmission_time_seconds = transmission_time / 1000.0
+    # Calculate throughput (bits/second)
+    total_bits = packet_size * hop_count
+    throughput = total_bits / transmission_time_seconds
+    return throughput
+
+# Function to convert seconds to milliseconds for display
+def sec_to_ms(seconds):
+    """Convert seconds to milliseconds"""
+    return seconds * 1000.0
+
 #--------------------- Vector-Based Forwarding (VBF) Tab ---------------------#
 with tab1:
     st.header("Vector-Based Forwarding (VBF) Protocol")
@@ -203,12 +224,13 @@ with tab1:
                 "path_length": vbf_sim._calculate_path_length(),
                 "energy_consumption": vbf_sim.energy_consumption,
                 "energy_per_hop": vbf_sim.energy_consumption / max(1, vbf_sim.hop_count),
-                "total_delay": vbf_sim.total_delay,
-                "avg_delay_per_hop": vbf_sim.total_delay / max(1, vbf_sim.hop_count),
+                "total_delay": sec_to_ms(vbf_sim.total_delay),  # Convert to ms
+                "avg_delay_per_hop": sec_to_ms(vbf_sim.total_delay / max(1, vbf_sim.hop_count)),  # Convert to ms
                 "packet_delivery_ratio": vbf_sim.packet_delivery_ratio,
                 "energy_efficiency": vbf_sim._calculate_path_length() / max(0.1, vbf_sim.energy_consumption),
                 "pipe_radius": vbf_sim.pipe_radius,
-                "nodes_in_pipe": len(vbf_sim.pipe_nodes_indices)
+                "nodes_in_pipe": len(vbf_sim.pipe_nodes_indices),
+                "throughput": calculate_throughput(1000, sec_to_ms(vbf_sim.total_delay), vbf_sim.hop_count)
             }
             
             # Create the static visualization
@@ -263,9 +285,10 @@ with tab1:
                 st.metric("Energy Efficiency", f"{vbf_sim._calculate_path_length() / max(0.1, vbf_sim.energy_consumption):.4f} units/μJ")
                 
             with vbf_metric_col3:
-                st.metric("End-to-End Delay", f"{vbf_sim.total_delay:.4f} s")
-                st.metric("Avg Delay per Hop", f"{vbf_sim.total_delay/max(1, vbf_sim.hop_count):.4f} s/hop")
+                st.metric("End-to-End Delay", f"{sec_to_ms(vbf_sim.total_delay):.2f} ms")
+                st.metric("Avg Delay per Hop", f"{sec_to_ms(vbf_sim.total_delay/max(1, vbf_sim.hop_count)):.2f} ms/hop")
                 st.metric("Packet Delivery Ratio", f"{vbf_sim.packet_delivery_ratio:.4f}")
+                st.metric("Throughput", f"{calculate_throughput(1000, sec_to_ms(vbf_sim.total_delay), vbf_sim.hop_count):.2f} bps")
             
             # Display detailed hop-by-hop metrics
             st.subheader("Hop-by-Hop Metrics")
@@ -284,7 +307,7 @@ with tab1:
                 hop_data.append({
                     "Hop": i+1,
                     "Distance (units)": f"{hop_distance:.2f}",
-                    "Delay (s)": f"{hop_delay:.4f}",
+                    "Delay (ms)": f"{sec_to_ms(hop_delay):.2f}",
                     "Energy (μJ)": f"{hop_energy:.2f}"
                 })
             
@@ -580,7 +603,7 @@ with tab2:
                 with packet_col2:
                     st.metric("Hop Count", len(packet.hops) - 1)
                     st.metric("Delivery Status", "Delivered" if packet.delivery_time else "Failed")
-                    st.metric("Latency", f"{packet.get_latency():.4f} s")
+                    st.metric("Latency", f"{sec_to_ms(packet.get_latency()):.2f} ms")
                 
                 # Store metrics in session state for comparison
                 energy_values = list(router.performance_metrics['energy_consumption'].values())
@@ -615,12 +638,13 @@ with tab2:
                     "path_length": total_path_length,
                     "energy_consumption": total_energy,
                     "energy_per_hop": total_energy / max(1, len(path) - 1),
-                    "total_delay": packet.get_latency(),
-                    "avg_delay_per_hop": packet.get_latency() / max(1, len(path) - 1),
+                    "total_delay": sec_to_ms(packet.get_latency()),  # Convert to ms
+                    "avg_delay_per_hop": sec_to_ms(packet.get_latency() / max(1, len(path) - 1)),  # Convert to ms
                     "packet_delivery_ratio": 1.0,  # Successfully delivered
                     "energy_efficiency": direct_distance / max(0.1, total_energy),
                     "beam_width": fbr_beam_width,
-                    "path_efficiency": direct_distance / total_path_length if total_path_length > 0 else 0
+                    "path_efficiency": direct_distance / total_path_length if total_path_length > 0 else 0,
+                    "throughput": calculate_throughput(1000, sec_to_ms(packet.get_latency()), len(path) - 1)
                 }
                 
                 # Create animation - only if we have sufficient frames
@@ -780,9 +804,10 @@ with tab2:
                     st.metric("Energy per Hop", f"{total_energy/(len(path)-1) if len(path)>1 else 0:.2f} μJ/hop")
                 
                 with metric_col3:
-                    st.metric("End-to-End Delay", f"{packet.get_latency():.4f} s")
-                    st.metric("Average Delay per Hop", f"{packet.get_latency()/(len(path)-1) if len(path)>1 else 0:.4f} s/hop")
+                    st.metric("End-to-End Delay", f"{sec_to_ms(packet.get_latency()):.2f} ms")
+                    st.metric("Average Delay per Hop", f"{sec_to_ms(packet.get_latency()/(len(path)-1) if len(path)>1 else 0):.2f} ms/hop")
                     st.metric("Beam Width", f"{fbr_beam_width}°")
+                    st.metric("Throughput", f"{calculate_throughput(1000, sec_to_ms(packet.get_latency()), len(path)-1):.2f} bps")
                 
                 # Display detailed node energy consumption
                 st.subheader("Node Energy Consumption")
@@ -1160,12 +1185,14 @@ with tab3:
                 st.metric("Energy per Node", f"{avg_energy_consumption/max(1, uwsn_sim.n_nodes):.6f} J/node")
             
             with avg_metric_col2:
-                st.metric("Average Transmission Delay", f"{avg_delay:.6f} s")
-                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.6f} s")
+                st.metric("Average Transmission Delay", f"{avg_delay:.2f} ms")
+                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.2f} ms")
                 # Calculate packet delivery time based on delay
                 if uwsn_sim.transmission_delay:
                     packet_delivery_time = uwsn_sim.transmission_delay[-1] if uwsn_sim.transmission_delay else 0
-                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.6f} s")
+                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.2f} ms")
+                # Display throughput
+                st.metric("Throughput", f"{calculate_throughput(1000, uwsn_sim.transmission_delay[-1], 1):.2f} bps")
             
             with avg_metric_col3:
                 # Calculate network lifetime metrics
@@ -1263,12 +1290,14 @@ with tab3:
                 st.metric("Energy per Node", f"{avg_energy_consumption/max(1, uwsn_sim.n_nodes):.6f} J/node")
             
             with avg_metric_col2:
-                st.metric("Average Transmission Delay", f"{avg_delay:.6f} s")
-                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.6f} s")
+                st.metric("Average Transmission Delay", f"{avg_delay:.2f} ms")
+                st.metric("Total Transmission Delay", f"{sum(uwsn_sim.transmission_delay):.2f} ms")
                 # Calculate packet delivery time based on delay
                 if uwsn_sim.transmission_delay:
                     packet_delivery_time = uwsn_sim.transmission_delay[-1] if uwsn_sim.transmission_delay else 0
-                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.6f} s")
+                    st.metric("Last Packet Delivery Time", f"{packet_delivery_time:.2f} ms")
+                # Display throughput
+                st.metric("Throughput", f"{calculate_throughput(1000, uwsn_sim.transmission_delay[-1], 1):.2f} bps")
             
             with avg_metric_col3:
                 # Calculate network lifetime metrics
@@ -1294,6 +1323,14 @@ with tab3:
                                for m in members if uwsn_sim.energy_levels[m] > 0)
             pdr = active_members / max(1, total_members) if total_members > 0 else 0
             
+            # Calculate throughput (assume 1000 bits packet size for each cluster member)
+            throughput = 0
+            if total_delay > 0 and total_members > 0:
+                # Estimate total data transmitted (bits) - each cluster member sends data to CH
+                total_bits = 1000 * active_members  # 1000 bits per packet
+                # Convert total_delay to seconds for bps calculation
+                throughput = total_bits / (total_delay / 1000.0)
+            
             st.session_state.uwsn_simulated = True
             st.session_state.uwsn_metrics = {
                 "protocol": "UWSN Clustering",
@@ -1302,11 +1339,12 @@ with tab3:
                 "cluster_members": total_members,
                 "energy_consumption": total_energy,
                 "energy_per_node": total_energy / max(1, uwsn_sim.n_nodes),
-                "total_delay": total_delay,
+                "total_delay": total_delay,  # Already in ms
                 "network_lifetime": network_lifetime,
                 "packet_delivery_ratio": pdr,
                 "survival_rate": lifetime_percentage if uwsn_sim.active_nodes else 0,
-                "energy_efficiency": uwsn_sim.n_nodes / max(0.1, total_energy)
+                "energy_efficiency": uwsn_sim.n_nodes / max(0.1, total_energy),
+                "throughput": throughput
             }
 
 #--------------------- Protocol Comparison Tab ---------------------#
@@ -1335,7 +1373,8 @@ with tab4:
                     "End-to-End Delay",
                     "Hop Count",
                     "Packet Delivery Ratio",
-                    "Energy Efficiency"
+                    "Energy Efficiency",
+                    "Throughput"
                 ]
             }
             
@@ -1343,37 +1382,40 @@ with tab4:
             if "VBF" in simulated_protocols:
                 metrics_data["VBF"] = [
                     f"{st.session_state.vbf_metrics['energy_consumption']:.2f} μJ",
-                    f"{st.session_state.vbf_metrics['total_delay']:.4f} s",
+                    f"{st.session_state.vbf_metrics['total_delay']:.2f} ms",
                     f"{st.session_state.vbf_metrics['hop_count']}",
                     f"{st.session_state.vbf_metrics['packet_delivery_ratio']:.4f}",
-                    f"{st.session_state.vbf_metrics['energy_efficiency']:.4f} units/μJ"
+                    f"{st.session_state.vbf_metrics['energy_efficiency']:.4f} units/μJ",
+                    f"{st.session_state.vbf_metrics['throughput']:.2f} bps"
                 ]
             else:
-                metrics_data["VBF"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                metrics_data["VBF"] = ["N/A", "N/A", "N/A", "N/A", "N/A", "N/A"]
                 
             # Add FBR metrics if available
             if "FBR" in simulated_protocols:
                 metrics_data["FBR"] = [
                     f"{st.session_state.fbr_metrics['energy_consumption']:.2f} μJ",
-                    f"{st.session_state.fbr_metrics['total_delay']:.4f} s",
+                    f"{st.session_state.fbr_metrics['total_delay']:.2f} ms",
                     f"{st.session_state.fbr_metrics['hop_count']}",
                     f"{st.session_state.fbr_metrics['packet_delivery_ratio']:.4f}",
-                    f"{st.session_state.fbr_metrics['energy_efficiency']:.4f} units/μJ"
+                    f"{st.session_state.fbr_metrics['energy_efficiency']:.4f} units/μJ",
+                    f"{st.session_state.fbr_metrics['throughput']:.2f} bps"
                 ]
             else:
-                metrics_data["FBR"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                metrics_data["FBR"] = ["N/A", "N/A", "N/A", "N/A", "N/A", "N/A"]
                 
             # Add UWSN metrics if available
             if "UWSN Clustering" in simulated_protocols:
                 metrics_data["UWSN Clustering"] = [
                     f"{st.session_state.uwsn_metrics['energy_consumption']:.6f} J",
-                    f"{st.session_state.uwsn_metrics['total_delay']:.6f} s",
+                    f"{st.session_state.uwsn_metrics['total_delay']:.2f} ms",
                     f"{st.session_state.uwsn_metrics['cluster_heads']} (clusters)",
                     f"{st.session_state.uwsn_metrics['packet_delivery_ratio']:.4f}",
-                    f"{st.session_state.uwsn_metrics['energy_efficiency']:.4f} nodes/J"
+                    f"{st.session_state.uwsn_metrics['energy_efficiency']:.4f} nodes/J",
+                    f"{st.session_state.uwsn_metrics['throughput']:.2f} bps"
                 ]
             else:
-                metrics_data["UWSN Clustering"] = ["N/A", "N/A", "N/A", "N/A", "N/A"]
+                metrics_data["UWSN Clustering"] = ["N/A", "N/A", "N/A", "N/A", "N/A", "N/A"]
                 
             # Display metrics comparison table
             metrics_df = pd.DataFrame(metrics_data)
@@ -1687,6 +1729,7 @@ with priority_col1:
 with priority_col2:
     scalability_priority = st.slider("Scalability Importance", 1, 10, 5, key="scalability_priority")
     robustness_priority = st.slider("Communication Robustness Importance", 1, 10, 5, key="robustness_priority")
+    throughput_priority = st.slider("Throughput Importance", 1, 10, 5, key="throughput_priority")
 
 # Calculate weighted scores
 if st.button("Get Protocol Recommendation", key="get_recommendation"):
@@ -1697,21 +1740,24 @@ if st.button("Get Protocol Recommendation", key="get_recommendation"):
             "reliability": 7, 
             "topology": 8,
             "scalability": 7,
-            "robustness": 7
+            "robustness": 7,
+            "throughput": 6
         },
         "FBR": {
             "energy": 8,
             "reliability": 8,
             "topology": 7,
             "scalability": 6, 
-            "robustness": 8
+            "robustness": 8,
+            "throughput": 7
         },
         "UWSN Clustering": {
             "energy": 9,
             "reliability": 7,
             "topology": 5,
             "scalability": 9,
-            "robustness": 6
+            "robustness": 6,
+            "throughput": 5
         }
     }
     
@@ -1723,12 +1769,13 @@ if st.button("Get Protocol Recommendation", key="get_recommendation"):
             score["reliability"] * reliability_priority +
             score["topology"] * topology_priority +
             score["scalability"] * scalability_priority +
-            score["robustness"] * robustness_priority
+            score["robustness"] * robustness_priority +
+            score["throughput"] * throughput_priority
         )
     
     # Find the best protocol
     best_protocol = max(weighted_scores, key=weighted_scores.get)
-    total_priority = energy_priority + reliability_priority + topology_priority + scalability_priority + robustness_priority
+    total_priority = energy_priority + reliability_priority + topology_priority + scalability_priority + robustness_priority + throughput_priority
     
     # Normalize scores to percentages
     normalized_scores = {}
@@ -1775,6 +1822,77 @@ if st.button("Get Protocol Recommendation", key="get_recommendation"):
     plt.tight_layout()
     
     # Show the chart
+    show_figure(fig)
+    
+    # Add a performance comparison radar chart
+    st.subheader("Protocol Performance Comparison")
+    
+    # Define metrics for radar chart
+    radar_categories = ['Energy Efficiency', 'Reliability', 'Scalability', 
+                       'Delay Performance', 'Throughput', 'Robustness']
+    
+    # Data for each protocol (scale 0-10)
+    # These values should ideally be calculated from actual metrics
+    radar_data = {
+        "VBF": [7, 7, 7, 6, 6, 7],
+        "FBR": [8, 8, 6, 7, 7, 8],
+        "UWSN Clustering": [9, 7, 9, 5, 5, 6]
+    }
+    
+    # Update with actual metric-based values if available
+    for protocol in simulated_protocols:
+        if protocol == "VBF" and "throughput" in st.session_state.vbf_metrics:
+            # Normalize throughput to 0-10 scale
+            throughput = st.session_state.vbf_metrics["throughput"]
+            radar_data["VBF"][4] = min(10, max(1, throughput / 100))
+        
+        elif protocol == "FBR" and "throughput" in st.session_state.fbr_metrics:
+            throughput = st.session_state.fbr_metrics["throughput"]
+            radar_data["FBR"][4] = min(10, max(1, throughput / 100))
+        
+        elif protocol == "UWSN Clustering" and "throughput" in st.session_state.uwsn_metrics:
+            throughput = st.session_state.uwsn_metrics["throughput"]
+            radar_data["UWSN Clustering"][4] = min(10, max(1, throughput / 100))
+    
+    # Create radar chart
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, polar=True)
+    
+    # Number of categories
+    num_cats = len(radar_categories)
+    
+    # Compute angle for each category
+    angles = np.linspace(0, 2*np.pi, num_cats, endpoint=False).tolist()
+    # Make the plot circular
+    angles += angles[:1]
+    
+    # Define colors for each protocol
+    protocol_colors = {
+        "VBF": "blue",
+        "FBR": "green",
+        "UWSN Clustering": "red"
+    }
+    
+    # Plot each protocol
+    for protocol in simulated_protocols:
+        values = radar_data[protocol]
+        # Close the polygon
+        values += values[:1]
+        # Plot values
+        ax.plot(angles, values, 'o-', linewidth=2, label=protocol, color=protocol_colors[protocol])
+        ax.fill(angles, values, alpha=0.1, color=protocol_colors[protocol])
+    
+    # Set category labels
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(radar_categories)
+    
+    # Set y-axis limits
+    ax.set_ylim(0, 10)
+    
+    # Add legend
+    ax.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+    
+    plt.title('Protocol Performance Radar Chart', size=15)
     show_figure(fig)
     
     # Add recommendation explanation
