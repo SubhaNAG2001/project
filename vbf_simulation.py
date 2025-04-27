@@ -42,10 +42,12 @@ class VBFSimulation:
         
         # Performance metrics
         self.energy_consumption = 0
-        self.transmission_delays = []
-        self.total_delay = 0
+        self.transmission_delays = []  # In milliseconds
+        self.total_delay = 0  # In milliseconds
         self.packet_delivery_ratio = 0
         self.hop_count = len(self.path) - 1
+        self.throughput = 0  # Added throughput metric
+        self.energy_efficiency = 0  # Added energy efficiency metric (bits/μJ)
         
         # Calculate performance metrics
         self._calculate_performance_metrics()
@@ -379,22 +381,23 @@ class VBFSimulation:
         
         # Calculate energy and delay for each hop
         total_energy = 0
-        total_delay = 0
-        hop_delays = []
+        total_delay_ms = 0
+        hop_delays_ms = []
         
         for i in range(len(self.path) - 1):
             # Distance for this hop
             hop_distance = np.linalg.norm(self.path[i+1] - self.path[i])
             
-            # Transmission delay components
+            # Transmission delay components (in seconds)
             transmission_time = packet_size / data_rate  # time to transmit the packet
             propagation_time = hop_distance / propagation_speed  # time for signal to travel
             processing_delay = 0.01  # seconds (fixed processing overhead)
             
-            # Total delay for this hop
-            hop_delay = transmission_time + propagation_time + processing_delay
-            hop_delays.append(hop_delay)
-            total_delay += hop_delay
+            # Total delay for this hop (convert to milliseconds)
+            hop_delay_sec = transmission_time + propagation_time + processing_delay
+            hop_delay_ms = hop_delay_sec * 1000  # Convert to milliseconds
+            hop_delays_ms.append(hop_delay_ms)
+            total_delay_ms += hop_delay_ms
             
             # Energy for this hop
             tx_energy = transmit_energy_per_bit * packet_size
@@ -408,8 +411,20 @@ class VBFSimulation:
         
         # Store metrics
         self.energy_consumption = total_energy
-        self.transmission_delays = hop_delays
-        self.total_delay = total_delay
+        self.transmission_delays = hop_delays_ms
+        self.total_delay = total_delay_ms
+        
+        # Calculate throughput (bits per second)
+        if total_delay_ms > 0:
+            self.throughput = (packet_size * self.hop_count) / (total_delay_ms / 1000.0)
+        else:
+            self.throughput = 0
+            
+        # Calculate energy efficiency (bits transmitted per microjoule)
+        if total_energy > 0:
+            self.energy_efficiency = (packet_size * self.hop_count) / total_energy
+        else:
+            self.energy_efficiency = 0
         
         # Simulate packet delivery ratio based on path length
         # (longer paths have higher chance of failure)
@@ -430,10 +445,13 @@ class VBFSimulation:
         print("\n--- Energy ---")
         print(f"Total Energy Consumption: {self.energy_consumption:.2f} microjoules")
         print(f"Energy per Hop: {self.energy_consumption/max(1, self.hop_count):.2f} microjoules/hop")
+        print(f"Energy Efficiency: {self.energy_efficiency:.4f} bits/microjoule")
         print("\n--- Delay ---")
-        print(f"Total End-to-End Delay: {self.total_delay:.4f} seconds")
+        print(f"Total End-to-End Delay: {self.total_delay:.2f} milliseconds")
         avg_hop_delay = self.total_delay / max(1, self.hop_count)
-        print(f"Average Delay per Hop: {avg_hop_delay:.4f} seconds/hop")
+        print(f"Average Delay per Hop: {avg_hop_delay:.2f} milliseconds/hop")
+        print("\n--- Throughput ---")
+        print(f"Network Throughput: {self.throughput:.2f} bits/second")
         print("\n--- Reliability ---")
         print(f"Packet Delivery Ratio: {self.packet_delivery_ratio:.4f}")
         print("===========================================\n")
@@ -451,10 +469,13 @@ class VBFSimulation:
             f.write("\n--- Energy ---\n")
             f.write(f"Total Energy Consumption: {self.energy_consumption:.2f} microjoules\n")
             f.write(f"Energy per Hop: {self.energy_consumption/max(1, self.hop_count):.2f} microjoules/hop\n")
+            f.write(f"Energy Efficiency: {self.energy_efficiency:.4f} bits/microjoule\n")
             f.write("\n--- Delay ---\n")
-            f.write(f"Total End-to-End Delay: {self.total_delay:.4f} seconds\n")
+            f.write(f"Total End-to-End Delay: {self.total_delay:.2f} milliseconds\n")
             avg_hop_delay = self.total_delay / max(1, self.hop_count)
-            f.write(f"Average Delay per Hop: {avg_hop_delay:.4f} seconds/hop\n")
+            f.write(f"Average Delay per Hop: {avg_hop_delay:.2f} milliseconds/hop\n")
+            f.write("\n--- Throughput ---\n")
+            f.write(f"Network Throughput: {self.throughput:.2f} bits/second\n")
             f.write("\n--- Reliability ---\n")
             f.write(f"Packet Delivery Ratio: {self.packet_delivery_ratio:.4f}\n")
             
@@ -464,21 +485,29 @@ class VBFSimulation:
                 hop_distance = np.linalg.norm(self.path[i+1] - self.path[i])
                 f.write(f"\nHop {i+1}:\n")
                 f.write(f"  Distance: {hop_distance:.2f} units\n")
-                f.write(f"  Delay: {self.transmission_delays[i]:.4f} seconds\n")
+                f.write(f"  Delay: {self.transmission_delays[i]:.2f} milliseconds\n")
                 
                 # Calculate energy for this hop
                 transmit_energy = 0.5 * 1000  # transmit_energy_per_bit * packet_size
                 receive_energy = 0.25 * 1000  # receive_energy_per_bit * packet_size
                 hop_energy = (transmit_energy + receive_energy) * (1 + (hop_distance / 100) ** 2)
                 f.write(f"  Energy: {hop_energy:.2f} microjoules\n")
+                
+                # Calculate and add throughput for this hop
+                hop_throughput = 1000 / (self.transmission_delays[i] / 1000.0) if self.transmission_delays[i] > 0 else 0
+                f.write(f"  Throughput: {hop_throughput:.2f} bits/second\n")
+                
+                # Calculate and add energy efficiency for this hop
+                hop_efficiency = 1000 / hop_energy if hop_energy > 0 else 0
+                f.write(f"  Energy Efficiency: {hop_efficiency:.4f} bits/microjoule\n")
             
+            # Add comparative data for different pipe radii
             f.write("\n===== COMPARATIVE ANALYSIS =====\n")
             f.write("Effect of pipe radius on performance metrics:\n\n")
             
-            # Add comparative data for different pipe radii
             pipe_radii = [50, 100, 150, 200, 250]
-            f.write("Pipe Radius | Hop Count | Path Length | Energy | Delay | PDR\n")
-            f.write("--------------------------------------------------------\n")
+            f.write("Pipe Radius | Hop Count | Path Length | Energy | Delay (ms) | Throughput | Efficiency | PDR\n")
+            f.write("-------------------------------------------------------------------------------------\n")
             
             # Store current pipe radius
             original_radius = self.pipe_radius
@@ -494,7 +523,7 @@ class VBFSimulation:
                 
                 # Write the metrics
                 path_length = self._calculate_path_length()
-                f.write(f"{radius:11d} | {self.hop_count:9d} | {path_length:11.1f} | {self.energy_consumption:6.0f} | {self.total_delay:5.3f} | {self.packet_delivery_ratio:.4f}\n")
+                f.write(f"{radius:11d} | {self.hop_count:9d} | {path_length:11.1f} | {self.energy_consumption:6.0f} | {self.total_delay:9.1f} | {self.throughput:10.0f} | {self.energy_efficiency:.4f} | {self.packet_delivery_ratio:.4f}\n")
             
             # Restore original radius
             self.pipe_radius = original_radius
@@ -556,18 +585,18 @@ class VBFSimulation:
                     f'{energy:.0f}',
                     ha='center', va='bottom', fontsize=9, rotation=0)
         
-        # Plot delay line with improved style
+        # Plot delay line with improved style - now in milliseconds
         line = ax1_twin.plot(hop_indices, self.transmission_delays, 'ro-', 
                             linewidth=2.5, markersize=8, label='Delay')
         
-        # Add delay values
+        # Add delay values (now in ms)
         for i, delay in enumerate(self.transmission_delays):
-            ax1_twin.text(hop_indices[i], delay + 0.02, f'{delay:.3f}s', 
+            ax1_twin.text(hop_indices[i], delay + 2, f'{delay:.1f} ms', 
                          ha='center', va='bottom', fontsize=9, color='red')
         
         ax1.set_xlabel('Hop Number', fontsize=12)
         ax1.set_ylabel('Energy Consumption (microjoules)', fontsize=12, color='#3274A1')
-        ax1_twin.set_ylabel('Transmission Delay (seconds)', fontsize=12, color='red')
+        ax1_twin.set_ylabel('Transmission Delay (milliseconds)', fontsize=12, color='red')
         ax1.tick_params(axis='y', labelcolor='#3274A1')
         ax1_twin.tick_params(axis='y', labelcolor='red')
         ax1.set_title('Energy and Delay per Hop', fontsize=14, pad=10)
@@ -597,12 +626,12 @@ class VBFSimulation:
         # Add data labels to the last point
         ax2.text(hop_indices[-1], cumulative_energy[-1] + 100, 
                 f'{cumulative_energy[-1]:.0f}', color='blue', fontsize=10)
-        ax2_twin.text(hop_indices[-1], cumulative_delay[-1] + 0.02, 
-                     f'{cumulative_delay[-1]:.3f}s', color='red', fontsize=10)
+        ax2_twin.text(hop_indices[-1], cumulative_delay[-1] + 2, 
+                     f'{cumulative_delay[-1]:.1f} ms', color='red', fontsize=10)
         
         ax2.set_xlabel('Hop Number', fontsize=12)
         ax2.set_ylabel('Cumulative Energy (microjoules)', fontsize=12, color='blue')
-        ax2_twin.set_ylabel('Cumulative Delay (seconds)', fontsize=12, color='red')
+        ax2_twin.set_ylabel('Cumulative Delay (milliseconds)', fontsize=12, color='red')
         ax2.tick_params(axis='y', labelcolor='blue')
         ax2_twin.tick_params(axis='y', labelcolor='red')
         ax2.set_title('Cumulative Energy and Delay', fontsize=14, pad=10)
@@ -626,6 +655,7 @@ class VBFSimulation:
         energy_values = []
         delay_values = []
         pdr_values = []
+        efficiency_values = []
         
         # Store current pipe radius
         original_radius = self.pipe_radius
@@ -645,6 +675,7 @@ class VBFSimulation:
             energy_values.append(self.energy_consumption)
             delay_values.append(self.total_delay)
             pdr_values.append(self.packet_delivery_ratio)
+            efficiency_values.append(self.energy_efficiency)
         
         # Restore original radius
         self.pipe_radius = original_radius
@@ -656,18 +687,20 @@ class VBFSimulation:
         
         # X-axis positions for the bar chart
         x = np.arange(len(pipe_radii))
-        width = 0.2
+        width = 0.15  # Narrower to fit more bars
         
         # Plot bars for each metric with improved colors and style
-        colors = ['#3274A1', '#E1812C', '#3A923A', '#C03D3E']
-        bars1 = ax3.bar(x - width*1.5, [h/max(hop_counts) for h in hop_counts], width, 
+        colors = ['#3274A1', '#E1812C', '#3A923A', '#C03D3E', '#9467BD']
+        bars1 = ax3.bar(x - width*2, [h/max(hop_counts) for h in hop_counts], width, 
                        color=colors[0], alpha=0.8, edgecolor='black', linewidth=1, label='Hop Count')
-        bars2 = ax3.bar(x - width/2, [e/max(energy_values) for e in energy_values], width, 
+        bars2 = ax3.bar(x - width, [e/max(energy_values) for e in energy_values], width, 
                        color=colors[1], alpha=0.8, edgecolor='black', linewidth=1, label='Energy')
-        bars3 = ax3.bar(x + width/2, [d/max(delay_values) for d in delay_values], width, 
+        bars3 = ax3.bar(x, [d/max(delay_values) for d in delay_values], width, 
                        color=colors[2], alpha=0.8, edgecolor='black', linewidth=1, label='Delay')
-        bars4 = ax3.bar(x + width*1.5, pdr_values, width, 
+        bars4 = ax3.bar(x + width, pdr_values, width, 
                        color=colors[3], alpha=0.8, edgecolor='black', linewidth=1, label='PDR')
+        bars5 = ax3.bar(x + width*2, [eff/max(efficiency_values) for eff in efficiency_values], width,
+                      color=colors[4], alpha=0.8, edgecolor='black', linewidth=1, label='Efficiency')
         
         ax3.set_xlabel('Pipe Radius', fontsize=12)
         ax3.set_ylabel('Normalized Value', fontsize=12)
@@ -695,10 +728,10 @@ class VBFSimulation:
         
         # Plot energy and delay
         ax4_2.plot(pipe_radii, energy_values, 's-', color=colors[1], linewidth=2, label='Energy')
-        ax4_3.plot(pipe_radii, delay_values, '^-', color=colors[2], linewidth=2, label='Delay')
+        ax4_3.plot(pipe_radii, delay_values, '^-', color=colors[2], linewidth=2, label='Delay (ms)')
         
         ax4_2.set_ylabel('Energy Consumption (microjoules)', fontsize=12, color=colors[1])
-        ax4_3.set_ylabel('End-to-End Delay (seconds)', fontsize=12, color=colors[2])
+        ax4_3.set_ylabel('End-to-End Delay (milliseconds)', fontsize=12, color=colors[2])
         
         ax4_2.tick_params(axis='y', labelcolor=colors[1])
         ax4_3.tick_params(axis='y', labelcolor=colors[2])
@@ -711,19 +744,48 @@ class VBFSimulation:
         ax4_4.tick_params(axis='y', labelcolor=colors[3])
         ax4_4.set_ylim([95, 100])  # Set a more useful range for PDR percentage
         
+        # Add energy efficiency on another axis
+        ax4_5 = ax4.twinx()
+        ax4_5.spines['right'].set_position(('outward', 180))
+        ax4_5.plot(pipe_radii, efficiency_values, '*-', color=colors[4], linewidth=2, label='Efficiency')
+        ax4_5.set_ylabel('Energy Efficiency (bits/μJ)', fontsize=12, color=colors[4])
+        ax4_5.tick_params(axis='y', labelcolor=colors[4])
+        
         # Combined legend
         lines1, labels1 = ax4.get_legend_handles_labels()
         lines2, labels2 = ax4_2.get_legend_handles_labels()
         lines3, labels3 = ax4_3.get_legend_handles_labels()
         lines4, labels4 = ax4_4.get_legend_handles_labels()
+        lines5, labels5 = ax4_5.get_legend_handles_labels()
         
-        ax4.legend(lines1 + lines2 + lines3 + lines4, 
-                 labels1 + labels2 + labels3 + labels4, 
+        ax4.legend(lines1 + lines2 + lines3 + lines4 + lines5, 
+                 labels1 + labels2 + labels3 + labels4 + labels5, 
                  loc='upper center', bbox_to_anchor=(0.5, -0.15), 
-                 ncol=4, frameon=True, fontsize=10)
+                 ncol=5, frameon=True, fontsize=10)
         
         ax4.set_title('Performance Metrics vs. Pipe Radius', fontsize=14, pad=10)
         ax4.grid(True, linestyle='--', alpha=0.6)
+        
+        # Create a separate figure for energy efficiency
+        fig_efficiency = plt.figure(figsize=(10, 6))
+        ax_efficiency = fig_efficiency.add_subplot(111)
+        
+        # Plot energy efficiency vs pipe radius
+        ax_efficiency.plot(pipe_radii, efficiency_values, 'ko-', linewidth=2.5, markersize=10, label='Energy Efficiency')
+        for i, val in enumerate(efficiency_values):
+            ax_efficiency.text(pipe_radii[i], val + 0.002, f'{val:.4f}', ha='center', fontsize=9)
+            
+        ax_efficiency.set_xlabel('Pipe Radius', fontsize=12)
+        ax_efficiency.set_ylabel('Energy Efficiency (bits/microjoule)', fontsize=12)
+        ax_efficiency.set_title('Energy Efficiency vs Pipe Radius', fontsize=14)
+        ax_efficiency.grid(True, linestyle='--', alpha=0.6)
+        ax_efficiency.legend(loc='best')
+        
+        plt.tight_layout()
+        plt.savefig('vbf_energy_efficiency_analysis.png', dpi=300, bbox_inches='tight')
+        
+        # Return to the main figure
+        plt.figure(fig.number)
         
         plt.tight_layout()
         plt.subplots_adjust(top=0.92, hspace=0.3, wspace=0.3)
